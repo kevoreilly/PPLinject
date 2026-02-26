@@ -117,13 +117,7 @@ terminate:
 
 __declspec(safebuffers) DWORD WINAPI LoadLibraryThreadFunc(LoadLibraryThread *Pointers)
 {
-	BOOLEAN Enabled;
 	HMODULE ModuleHandle;
-	PROCESS_MITIGATION Policy = {ProcessSignaturePolicy, 0};
-
-	Pointers->RtlAdjustPrivilege(SE_DEBUG_PRIVILEGE, TRUE, FALSE, &Enabled);
-
-	Pointers->NtSetInformationProcess(((HANDLE)-1), (PROCESSINFOCLASS)52, &Policy, sizeof(Policy));
 
 	ModuleHandle = (HMODULE)Pointers->LoadLibraryW(Pointers->DllPath);
 

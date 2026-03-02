@@ -104,7 +104,7 @@ On Windows 8.1 / Server 2012 R2, you might have to compile the binary statically
 
 ## Credits
 
-- [@gabriellandau](https://github.com/gabriellandau (Elastic Security) - PPLFault & Redux
+- [@gabriellandau](https://github.com/gabriellandau) (Elastic Security) - PPLFault & Redux
 - [@itm4n](https://twitter.com/itm4n) - Original PPLdump tool [https://github.com/itm4n/PPLdump]
 - [@tiraniddo](https://twitter.com/tiraniddo) - Windows Exploitation Tricks: Exploiting Arbitrary Object Directory Creation for Local Elevation of Privilege  
 [https://googleprojectzero.blogspot.com/2018/08/windows-exploitation-tricks-exploiting.html](https://googleprojectzero.blogspot.com/2018/08/windows-exploitation-tricks-exploiting.html)

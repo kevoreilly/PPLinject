@@ -1,3 +1,12 @@
+# PPLinject V2
+
+The recent 'Redux' upgrade to PPLFault by Gabriel Landau from Elastic Security has allowed PPL injection into all Windows 10 versions (22H2+) and into Windows 11 up to 23H2:
+
+https://www.elastic.co/security-labs/immutable-illusion
+https://github.com/gabriellandau/Redux
+
+Thank you to Gabriel Landau for this work, and to James Forshaw (@tyranid) for the underlying techniques, as well as @itm4n for PPLdump code which is extended here to create fake Knowndlls directory object to bypass dll signature enforcement à la Forshaw.
+
 # PPLinject
 
 This tool is derived from PPLdump by @itm4n (https://github.com/itm4n/PPLdump), described in two blog posts. The first part is about Protected Processes concepts while the second one discusses the bypass technique itself.

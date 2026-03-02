@@ -70,7 +70,7 @@ VOID PrintArguments()
 VOID PrintUsage()
 {
 	wprintf(
-		L"PPLinject v%ws - https://github.com/twinwave-security/PPLinject\n\n"
+		L"PPLinject v%ws - https://github.com/kevoreilly/PPLinject\n\n"
 		"Description:\n"
 		"  Inject an unsigned DLL into a Protected Process Light (PPL) with a *userland* exploit\n"
 		"\n",

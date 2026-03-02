@@ -465,7 +465,7 @@ bool IsValidPID(DWORD dwProcessId)
     return TRUE;
 }
 
-int PPLFault(_In_ DWORD dwTargetProcessId, _In_ LPWSTR pwszDllPath)
+int InjectDllv2(_In_ DWORD dwTargetProcessId, _In_ LPWSTR pwszDllPath)
 {
     int result = 1;
     DWORD bytesWritten = 0;

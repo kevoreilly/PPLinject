@@ -4396,46 +4396,24 @@ typedef struct _SECTION_IMAGE_INFORMATION
     SIZE_T MaximumStackSize;
     SIZE_T CommittedStackSize;
     ULONG SubSystemType;
-    union
-    {
-        struct
-        {
+    union {
+        struct {
             USHORT SubSystemMinorVersion;
             USHORT SubSystemMajorVersion;
         };
         ULONG SubSystemVersion;
     };
-    union
-    {
-        struct
-        {
-            USHORT MinorOperatingSystemVersion;
-            USHORT MajorOperatingSystemVersion;
-        };
-        ULONG OperatingSystemVersion;
-    };
+    ULONG GpValue;
     USHORT ImageCharacteristics;
     USHORT DllCharacteristics;
     USHORT Machine;
-    union
-    {
-        UCHAR ImageContainsCode;
-        UCHAR ImageFlags;
-        struct
-        {
-            UCHAR ComPlusNativeReady : 1;
-            UCHAR ComPlusILOnly : 1;
-            UCHAR ImageDynamicallyRelocated : 1;
-            UCHAR ImageMappedFlat : 1;
-            UCHAR BaseBelow4gb : 1;
-            UCHAR ComPlusPrefer32bit : 1;
-            UCHAR Reserved : 2;
-        };
-    };
+    BOOLEAN ImageContainsCode;
+    BOOLEAN Spare1;
     ULONG LoaderFlags;
-    ULONG ImageFileSize;
-    ULONG CheckSum;
+    ULONG ImageFileSize;                    // Reserved[0] for NT 4.0 and 2000
+    ULONG CheckSum;                         // Reserved[1] until Vista
 } SECTION_IMAGE_INFORMATION, *PSECTION_IMAGE_INFORMATION;
+
 
 typedef struct _RTL_USER_PROCESS_INFORMATION
 {

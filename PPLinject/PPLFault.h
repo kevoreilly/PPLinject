@@ -1,0 +1,1 @@
+int InjectDllv2(_In_ DWORD dwProcessId, _In_ LPWSTR pwszDllPath);

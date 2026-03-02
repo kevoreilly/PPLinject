@@ -86,6 +86,14 @@ typedef NTSTATUS (NTAPI * NtAllocateVirtualMemory_t)(
     ULONG     Protect
 );
 
+typedef NTSTATUS (NTAPI* NtProtectVirtualMemory_t)(
+    HANDLE ProcessHandle,
+    PVOID* BaseAddress,
+    SIZE_T* RegionSize,
+    ULONG NewProtect,
+    ULONG* OldProtect
+);
+
 typedef BOOL (WINAPI *WriteProcessMemory_t)(
     HANDLE  hProcess,
     LPVOID  lpBaseAddress,
@@ -136,6 +144,16 @@ typedef NTSTATUS (NTAPI * NtSetInformationProcess_t)(
     IN ULONG ProcessInformationLength
 );
 
+typedef NTSTATUS (NTAPI * NtDuplicateObject_t)(
+    HANDLE SourceProcessHandle,
+    HANDLE SourceHandle,
+    HANDLE TargetProcessHandle,
+    PHANDLE TargetHandle,
+    ACCESS_MASK DesiredAccess,
+    ULONG HandleAttributes,
+    ULONG Options
+);
+
 typedef DWORD (WINAPI * GetLastError_t)(void);
 
 #define MAGIC1 0x1BADC0D3
@@ -161,11 +179,9 @@ typedef HMODULE (*LoadLibraryPtr)(LPCSTR);
 
 typedef struct _LoadLibraryThread
 {
-	LoadLibraryW_t LoadLibraryW;
-	GetLastError_t GetLastError;
-	NtSetInformationProcess_t NtSetInformationProcess;
-	RtlAdjustPrivilege_t RtlAdjustPrivilege;
-	PWCHAR DllPath;
+    LoadLibraryW_t LoadLibraryW;
+    GetLastError_t GetLastError;
+    PWCHAR DllPath;
 } LoadLibraryThread;
 
 typedef struct _SHELLCODE_PARAMS
@@ -184,18 +200,22 @@ typedef struct _SHELLCODE_PARAMS
 
     // User params
     DWORD dwPid;
+    HANDLE DirHandle;
+    PHANDLE pLdrpKnownDllDirectoryHandle;
 
     // IAT
     NtOpenProcess_t pNtOpenProcess;
+    NtAllocateVirtualMemory_t pNtAllocateVirtualMemory;
+    NtProtectVirtualMemory_t pNtProtectVirtualMemory;
+    NtWriteVirtualMemory_t pNtWriteVirtualMemory;
     NtTerminateProcess_t pNtTerminateProcess;
     RtlAdjustPrivilege_t pRtlAdjustPrivilege;
-    NtAllocateVirtualMemory_t pNtAllocateVirtualMemory;
-    NtWriteVirtualMemory_t pNtWriteVirtualMemory;
     RtlCreateUserThread_t pRtlCreateUserThread;
     NtWaitForSingleObject_t pNtWaitForSingleObject;
-	NtSetInformationProcess_t pNtSetInformationProcess;
+    NtSetInformationProcess_t pNtSetInformationProcess;
+    NtDuplicateObject_t pNtDuplicateObject;
 
-	LoadLibraryW_t pLoadLibraryW;
-	GetLastError_t pGetLastError;
+    LoadLibraryW_t pLoadLibraryW;
+    GetLastError_t pGetLastError;
 
 } SHELLCODE_PARAMS, * PSHELLCODE_PARAMS;

@@ -55,6 +55,10 @@ typedef LONG NTSTATUS;
 #define STATUS_UNSUCCESSFUL  ((NTSTATUS)0xC0000001L)
 #endif
 
+#ifndef STATUS_OBJECT_NAME_COLLISION
+#define STATUS_OBJECT_NAME_COLLISION  ((NTSTATUS)0xC0000035L)
+#endif
+
 #ifndef ASSERT
 #ifdef _DEBUG
 #define ASSERT(x) assert(x)
@@ -4392,24 +4396,46 @@ typedef struct _SECTION_IMAGE_INFORMATION
     SIZE_T MaximumStackSize;
     SIZE_T CommittedStackSize;
     ULONG SubSystemType;
-    union {
-        struct {
+    union
+    {
+        struct
+        {
             USHORT SubSystemMinorVersion;
             USHORT SubSystemMajorVersion;
         };
         ULONG SubSystemVersion;
     };
-    ULONG GpValue;
+    union
+    {
+        struct
+        {
+            USHORT MinorOperatingSystemVersion;
+            USHORT MajorOperatingSystemVersion;
+        };
+        ULONG OperatingSystemVersion;
+    };
     USHORT ImageCharacteristics;
     USHORT DllCharacteristics;
     USHORT Machine;
-    BOOLEAN ImageContainsCode;
-    BOOLEAN Spare1;
+    union
+    {
+        UCHAR ImageContainsCode;
+        UCHAR ImageFlags;
+        struct
+        {
+            UCHAR ComPlusNativeReady : 1;
+            UCHAR ComPlusILOnly : 1;
+            UCHAR ImageDynamicallyRelocated : 1;
+            UCHAR ImageMappedFlat : 1;
+            UCHAR BaseBelow4gb : 1;
+            UCHAR ComPlusPrefer32bit : 1;
+            UCHAR Reserved : 2;
+        };
+    };
     ULONG LoaderFlags;
-    ULONG ImageFileSize;                    // Reserved[0] for NT 4.0 and 2000
-    ULONG CheckSum;                         // Reserved[1] until Vista
+    ULONG ImageFileSize;
+    ULONG CheckSum;
 } SECTION_IMAGE_INFORMATION, *PSECTION_IMAGE_INFORMATION;
-
 
 typedef struct _RTL_USER_PROCESS_INFORMATION
 {

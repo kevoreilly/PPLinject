@@ -8,3 +8,5 @@ bool BuildPayload(
     std::string & payloadBuffer,
     DWORD dwTargetProcessId,
 	LPWSTR pwszDllPath);
+
+void CleanupPayload();

